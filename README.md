@@ -1,6 +1,6 @@
 # WireWalk Studio
 
-A local desktop app for calibrating a rod from a screenshot, entering movement timestamps, and measuring the head's start-to-end separation along the rod. Distance and speed are exported as CSV files.
+A local desktop app for calibrating a rod from a screenshot, entering or automatically proposing movement timestamps, and measuring the head's start-to-end separation along the rod. Automatically proposed intervals require user verification. Distance and speed are exported as CSV files.
 
 The app accepts arbitrary video filenames. It does **not** require a prebuilt calibration CSV, an Excel workbook, a particular naming convention, or a Codex installation. Videos and images are processed locally.
 
@@ -41,6 +41,8 @@ One calibration is used for each recording. The camera must stay fixed within a 
 
 ## 2. Enter movement times
 
+You can enter times manually, import a CSV, or use **Suggest movement intervals automatically…**. The existing video preview, seek slider, frame-step buttons, play/pause, Set start/Set end, and manual editor remain available for every workflow.
+
 Enter intervals directly, using seconds or colon times:
 
 ```text
@@ -63,7 +65,35 @@ example_video.mp4,0:22,0:29
 
 The `video` column is optional. If present, only rows whose video basename matches the current recording are imported. A single CSV can list many videos; files sharing the same basename should use separate CSVs. The included `example_timestamps.csv` illustrates the format; replace its example video name and times with your data.
 
-Movement annotation is manual. Split intervals around pauses and handling; only the entered intervals count toward moving time. Applying edited timestamps preserves measurements for unchanged intervals and clears selections for changed boundaries.
+Movement annotation must be verified by the user, whether manually entered or automatically proposed. Split intervals around pauses and handling; only the accepted intervals count toward moving time. Applying edited timestamps preserves measurements for unchanged intervals and clears selections for changed boundaries.
+
+### Optional automatic proposals
+
+1. Complete and confirm the rod calibration.
+2. Click **Suggest movement intervals automatically…** on step 2.
+3. Choose an optional scan start/end and click **Detect movement proposals**. The background scan can be canceled and does not change existing times while running.
+4. Select a proposal and inspect its video using **Play interval**, **Check start**, **Check end**, and frame stepping. The review window has its own preview; the original step-2 video controls are also still available.
+5. Edit the start/end fields, use **Set start here / Set end here**, remove false positives, or add missed intervals. **Update selected** applies an edit. Editing a verified interval removes its verification. **Mark selected interval verified** also applies and validates its current edited boundaries.
+6. Mark every retained interval verified after checking its video.
+7. Click **Use verified intervals (replace editor)**. Only this explicit action replaces the main timestamp editor. Continue inspecting or editing times on step 2, then measure head endpoints as usual.
+
+No unverified proposal is used for distance, moving time, or speed. A canceled or failed scan leaves the existing intervals unchanged. If video/calibration changes before accepting proposals, detect again. Unchanged intervals retain any existing head measurements; changed boundaries require new head selections.
+
+**Detector assumptions.** This lightweight segmentation aid is not a trained mouse-recognition model or a validated behavior classifier. It works best for a **dark mouse against a light background** and a fixed camera. It searches a calibrated band around the rod for a compact dark body, then proposes sustained changes in body position parallel to the rod. Body position helps reduce sensitivity to head bobbing, but posture changes, swinging, shadows, dark objects, camera motion, or handling can still create false proposals. Slow or obscured movement can be missed. It is not intended for white mice on a light background. Verify the actual behavior in the video, not just the timestamps.
+
+Nearby cyan/blue gloves, ambiguous objects, large position jumps, and missing detections are excluded. These samples are **unknown**, not evidence of a stationary mouse. Proposals do not bridge unknown gaps. Other glove colors and some handling may not be recognized; remove handling during review.
+
+The scan samples approximately 8 frames/second. Refine approximate boundaries with full video frame stepping. Settings are starting values, not biological cutoffs:
+
+- **Min speed (0.5 cm/s):** minimum sustained body displacement rate along the rod; it does not change head endpoint distance.
+- **Min bout (0.5 s)** and **Min excursion (0.3 cm):** reject very short/small events.
+- **Merge pause (0.3 s):** joins brief quiet gaps within a continuously detected body track, never across excluded samples.
+- **Dark threshold (100):** maximum candidate grayscale brightness on a 0–255 scale; increase for a lighter dark mouse, checking for extra background objects.
+- **Above/below rod (4/8 cm):** vertical search-band size; adjust to the animal's posture/setup.
+- **Hanging below rod (on):** restrict body candidates to below the wire, which helps exclude above-wire placement/handling in inverted wire-walking tests. Turn this off for animals walking on top of the rod.
+- **Samples/s (8):** target frequency, quantized to video frames.
+
+Increase minimum speed/duration/excursion if fidgets create extra proposals; lower them cautiously for missed slow movement. **Save detection trace CSV** exports sampled positions, body-candidate coordinates, exclusions, smoothed positions, and estimated axial speeds. In the review video, a green body marker is an included sample and red is an excluded candidate. These body positions propose timing only; distance still uses the head endpoints selected in step 3.
 
 ## 3. Measure the endpoints
 
@@ -91,6 +121,8 @@ These are endpoint-based speeds; reversals within one movement interval are canc
 The actual timestamps of the nearest decoded frames are shown and exported alongside the entered times. Rounding to available frames can cause small differences; annotated movement time remains the entered end minus start. The current timestamp resolver requires frames within 0.06 seconds of the entered boundaries and is intended for ordinary laboratory video frame rates.
 
 ## Projects and export
+
+For automatic annotations, projects also store detector settings, sample exclusion counts, the verified interval list, and whether the user subsequently edited the accepted times. CSV summaries label the interval input method. Old projects without detector metadata remain supported.
 
 **Save project** keeps the video reference, screenshot reference, known rod length, selected rod endpoints, entered timepoints, head selections, metadata, and confirmation states in one JSON file. **Open project** restores them. Paths are stored relative to the project file when possible. Keep the original video and screenshot available; the project does not embed media. The app can ask you to locate a missing video. If the screenshot is missing, existing video calibration and measurements can still be used.
 
@@ -133,4 +165,12 @@ python summarize_exports.py "path/to/exports" --output "path/to/combined"
 
 Commit the source files in this folder, `requirements.txt`, this README, the Windows launcher, the example timestamp CSV, and `.gitignore`. Choose a license appropriate for your intended use and add a `LICENSE` file before offering reuse under that license.
 
-The supplied `.gitignore` excludes environments, caches, recordings, project files, and measurement exports. No personal experimental data or machine-specific input paths are included in this package.
+The supplied `.gitignore` excludes environments, caches, recordings, project files, motion traces, and measurement exports. No personal experimental data or machine-specific input paths are included in this package.
+
+Version 1.1 adds `movement_detector.py` and `motion_review.py`; upload these together with the updated `wirewalk.py`, `core.py`, and README when updating an existing repository. Version 1.1.1 fixes proposal rows being hidden behind their containing panel; updating `motion_review.py` and restarting the app applies this display fix. Package requirements are unchanged. See `CHANGELOG.md` for the feature summary. No GitHub repository is modified by the local app.
+
+Synthetic regression tests (no experimental data required):
+
+```sh
+python -m unittest discover -s tests -v
+```

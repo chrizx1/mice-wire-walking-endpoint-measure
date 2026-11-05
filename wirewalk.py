@@ -105,6 +105,7 @@ class Studio:
         self.source_image=None;self.reference_image=None;self.measure_frames={};self.reference_actual=0
         self.wi=0;self.source_select=False;self.video_select=False
         self.play_cap=None;self.play_job=None;self.seek_job=None;self.preview_time=0;self.setting_slider=False
+        self.motion_review=None
         root.title('WireWalk Studio');root.geometry('1400x930');root.minsize(1100,760)
         toolbar=ttk.Frame(root);toolbar.pack(fill='x',padx=10,pady=8)
         for label,callback in [('New video',self.open_video),('Open project',self.load_project),
@@ -175,6 +176,7 @@ class Studio:
         bar=ttk.Frame(left);bar.pack(fill='x',pady=7)
         ttk.Button(bar,text='Apply intervals',command=self.apply_times).pack(side='left',padx=3)
         ttk.Button(bar,text='Import timestamp CSV',command=self.import_times).pack(side='left',padx=3)
+        ttk.Button(left,text='Suggest movement intervals automatically…',command=self.detect_movements).pack(fill='x',pady=(0,5))
         self.time_table=ttk.Treeview(left,columns=('n','start','end','time','status'),show='headings',height=9)
         for key,label,width in [('n','#',35),('start','Start (s)',75),('end','End (s)',75),('time','Moving (s)',80),('status','State',120)]:
             self.time_table.heading(key,text=label);self.time_table.column(key,width=width,stretch=True)
@@ -199,7 +201,7 @@ class Studio:
         ttk.Button(marks,text='Add interval',command=self.add_marked_interval).pack(side='left',padx=3)
         bar=ttk.Frame(self.time_tab);bar.pack(fill='x',padx=8,pady=7)
         ttk.Button(bar,text='Next: measure endpoints',command=self.go_measure).pack(side='right')
-        ttk.Label(bar,text='Only the intervals you enter count as moving time. Automatic movement detection is not used.').pack(side='left')
+        ttk.Label(bar,text='Enter times manually, or detect proposals and verify/edit them. Video checking remains available.').pack(side='left')
 
     def build_measurements(self):
         bar=ttk.Frame(self.measure_tab);bar.pack(fill='x',padx=8,pady=8)
@@ -241,7 +243,7 @@ class Studio:
         try:
             info,first=core.video_info(path)
             project=core.Project(path,info)
-            self.pause();self.project=project;self.project_path=None;self.dirty=False
+            self.close_motion_review();self.pause();self.project=project;self.project_path=None;self.dirty=False
             self.install_project(first)
             self.tabs.select(self.cal_tab)
             self.status.set('Load a calibration screenshot, or use a video frame. Enter the known rod span and select its endpoints.')
@@ -412,6 +414,26 @@ class Studio:
             self.status.set(f'Imported {len(windows)} movement intervals. Skipped {skipped} rows for other videos.')
         except Exception as exc:self.error(exc)
 
+    def detect_movements(self):
+        if self.project is None:return self.error('Open a video first.')
+        if not self.project.calibration['confirmed']:return self.error('Confirm the video rod calibration before detecting movement.')
+        if self.motion_review is not None:
+            self.motion_review.root.deiconify();self.motion_review.root.lift();return
+        from motion_review import MotionReview
+        self.pause();self.motion_review=MotionReview(self)
+
+    def use_detected_intervals(self,windows,metadata):
+        self.project.set_windows(windows)
+        self.project.movement_detection=metadata
+        self.times.delete('1.0','end')
+        self.times.insert('1.0','\n'.join(f'{core.format_time(a)}-{core.format_time(b)}' for a,b in windows))
+        self.changed();self.update_choices();self.show_movement()
+        self.tabs.select(self.time_tab)
+        self.status.set(f'Applied {len(windows)} user-verified movement intervals. You can still edit the times and inspect the video before measuring head endpoints.')
+
+    def close_motion_review(self):
+        if self.motion_review is not None:self.motion_review.close()
+
     def table_select(self,event=None):
         selected=self.time_table.selection()
         if selected and self.project is not None:
@@ -536,7 +558,9 @@ class Studio:
             # Apply unsaved timestamp text so saving cannot lose the typed intervals.
             text=self.times.get('1.0','end').strip()
             if text:self.project.set_windows(core.parse_intervals(text,self.project.info['last_frame_s']))
-            else:self.project.movements=[]
+            else:
+                self.project.movements=[]
+                if self.project.movement_detection:self.project.movement_detection['edited_after_verification']=True
             if not path:path=filedialog.asksaveasfilename(title='Save WireWalk project',defaultextension='.json',
                  initialfile=self.project.recording_id+'_project.json',filetypes=[('WireWalk project','*.json')])
             if not path:return
@@ -554,7 +578,7 @@ class Studio:
                 replacement=filedialog.askopenfilename(title='Locate the project video',filetypes=[('Video','*.mp4 *.mov *.avi *.mkv')])
                 if not replacement:return
                 project=core.Project.load(path,replacement)
-            self.pause();self.project=project;self.project_path=Path(path);self.install_project(core.read_frame(project.video,0)[0]);self.dirty=False
+            self.close_motion_review();self.pause();self.project=project;self.project_path=Path(path);self.install_project(core.read_frame(project.video,0)[0]);self.dirty=False
             self.status.set('Project loaded. Calibration, movement intervals, and saved head points are restored.')
         except Exception as exc:self.error(exc)
 
@@ -581,7 +605,7 @@ class Studio:
         except Exception as exc:self.error(exc)
 
     def close(self):
-        if self.allow_replace():self.pause();self.root.destroy()
+        if self.allow_replace():self.close_motion_review();self.pause();self.root.destroy()
 
 
 def main():

@@ -185,6 +185,7 @@ class Project:
         self.calibration = dict(source_type='', screenshot='', source_points=[], video_points=[],
                                 reference_time_s=0.0, source_frame_time_s=0.0, mapping={}, confirmed=False)
         self.movements = []
+        self.movement_detection = {}
 
     @property
     def known_cm(self):
@@ -206,6 +207,9 @@ class Project:
     def set_windows(self, windows):
         windows = validate_windows(windows, self.info['last_frame_s'])
         old = self.movements
+        same=(len(old)==len(windows) and all(abs(m['start_s']-a)<1e-8 and abs(m['end_s']-b)<1e-8 for m,(a,b) in zip(old,windows)))
+        if self.movement_detection and not same:
+            self.movement_detection['edited_after_verification']=True
         self.movements = [next((m for m in old if abs(m['start_s']-a)<1e-8 and abs(m['end_s']-b)<1e-8),
                                dict(start_s=a,end_s=b,points={},reviewed=False)) for a,b in windows]
 
@@ -262,10 +266,14 @@ class Project:
         rows = self.rows();complete = bool(rows) and all(r['reviewed'] for r in rows)
         time = sum(r['moving_time_s'] for r in rows)
         distance = sum(r['distance_cm'] for r in rows) if complete else None
+        timing_source=('auto_detected_verified' if self.movement_detection.get('verified') and not self.movement_detection.get('edited_after_verification')
+                       else 'manual_edit_after_detection' if self.movement_detection else 'manual')
         return dict(recording_id=safe_id(self.recording_id),animal=self.animal,date=self.date,run=self.run,
             video=Path(self.video).name,workbook='',source_cell='manual_timestamp_input',
             calibration_image=Path(self.calibration['screenshot']).name if self.calibration['screenshot'] else self.calibration['source_type'],
-            measurement=METHOD,known_length_inches=self.known_cm/2.54,known_length_cm=self.known_cm,
+            measurement=METHOD,interval_input_method=timing_source,
+            interval_detector=self.movement_detection.get('method',''),
+            known_length_inches=self.known_cm/2.54,known_length_cm=self.known_cm,
             moving_time_s=time,movement_intervals=len(rows),confirmed_intervals=sum(r['reviewed'] for r in rows),
             distance_cm=distance,distance_inches=distance/2.54 if complete else None,
             speed_cm_s=distance/time if complete else None,status='confirmed' if complete else 'incomplete_endpoint_review')
@@ -289,7 +297,8 @@ class Project:
         calibration['screenshot'] = relative(calibration['screenshot'])
         data = dict(kind='wirewalk_studio',version=1,video=relative(self.video),info=self.info,
                     recording_id=self.recording_id,animal=self.animal,date=self.date,run=self.run,
-                    length=self.length,unit=self.unit,calibration=calibration,movements=self.movements)
+                    length=self.length,unit=self.unit,calibration=calibration,movements=self.movements,
+                    movement_detection=self.movement_detection)
         path.write_text(json.dumps(data,indent=2),encoding='utf-8')
 
     @classmethod
@@ -325,6 +334,7 @@ class Project:
                 target['points'][role] = p
             target['reviewed'] = bool(saved.get('reviewed')) and project.calibration['confirmed'] and len(target['points'])==2
         project.validate_metadata()
+        project.movement_detection=data.get('movement_detection',{})
         return project
 
     def export(self, directory):
